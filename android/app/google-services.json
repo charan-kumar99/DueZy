@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "477566770667",
+    "project_id": "duezy-91ea2",
+    "storage_bucket": "duezy-91ea2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:477566770667:android:f128401b533a3462724dae",
+        "android_client_info": {
+          "package_name": "com.chanu.duezy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyClcc0YxJmTN2gLJ2k3iWr5NCG_VLJQx0o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
