@@ -86,15 +86,13 @@ class NotificationService {
     return granted;
   }
 
-  // Reschedule notifications for all unpaid reminders.
+  // Reschedule notifications for all reminders.
   Future<void> scheduleAllReminders(List<Reminder> reminders) async {
     if (kIsWeb) return;
     await _plugin.cancelAll();
 
     for (final reminder in reminders) {
-      if (!reminder.isPaidThisCycle) {
-        await _scheduleReminderNotifications(reminder);
-      }
+      await _scheduleReminderNotifications(reminder);
     }
   }
 
@@ -104,6 +102,11 @@ class NotificationService {
     final now = tz.TZDateTime.now(tz.local);
 
     for (int monthOffset = 0; monthOffset <= 1; monthOffset++) {
+      // If marked paid, skip the current month (monthOffset = 0) but schedule the next month.
+      if (reminder.isPaidThisCycle && monthOffset == 0) {
+        continue;
+      }
+
       int year = now.year;
       int month = now.month + monthOffset;
       if (month > 12) {
@@ -133,29 +136,168 @@ class NotificationService {
             day,
           );
 
-          await _plugin.zonedSchedule(
-            id: notificationId,
-            title: '💸 ${reminder.title}',
-            body: '₹${reminder.amount.toStringAsFixed(0)} due — Day ${reminder.dayStart}–${reminder.dayEnd}',
-            scheduledDate: scheduledDate,
-            notificationDetails: NotificationDetails(
-              android: AndroidNotificationDetails(
-                'duezy_reminders',
-                'Bill Reminders',
-                channelDescription: 'Daily reminders for upcoming bills and EMIs',
-                importance: Importance.high,
-                priority: Priority.high,
-                icon: '@mipmap/ic_launcher',
-                color: _getCategoryColor(reminder.category),
-                enableVibration: true,
-                playSound: true,
+          try {
+            await _plugin.zonedSchedule(
+              id: notificationId,
+              title: '💸 ${reminder.title}',
+              body: '₹${reminder.amount.toStringAsFixed(0)} due — Day ${reminder.dayStart}–${reminder.dayEnd}',
+              scheduledDate: scheduledDate,
+              notificationDetails: NotificationDetails(
+                android: AndroidNotificationDetails(
+                  'duezy_reminders',
+                  'Bill Reminders',
+                  channelDescription: 'Daily reminders for upcoming bills and EMIs',
+                  importance: Importance.high,
+                  priority: Priority.high,
+                  icon: '@mipmap/ic_launcher',
+                  color: _getCategoryColor(reminder.category),
+                  enableVibration: true,
+                  playSound: true,
+                ),
               ),
-            ),
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-            payload: reminder.id,
-          );
+              androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+              payload: reminder.id,
+            );
+          } catch (e) {
+            if (kDebugMode) {
+              print('Failed to schedule exact alarm: $e. Retrying with inexact schedule.');
+            }
+            try {
+              await _plugin.zonedSchedule(
+                id: notificationId,
+                title: '💸 ${reminder.title}',
+                body: '₹${reminder.amount.toStringAsFixed(0)} due — Day ${reminder.dayStart}–${reminder.dayEnd}',
+                scheduledDate: scheduledDate,
+                notificationDetails: NotificationDetails(
+                  android: AndroidNotificationDetails(
+                    'duezy_reminders',
+                    'Bill Reminders',
+                    channelDescription: 'Daily reminders for upcoming bills and EMIs',
+                    importance: Importance.high,
+                    priority: Priority.high,
+                    icon: '@mipmap/ic_launcher',
+                    color: _getCategoryColor(reminder.category),
+                    enableVibration: true,
+                    playSound: true,
+                  ),
+                ),
+                androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+                payload: reminder.id,
+              );
+            } catch (innerErr) {
+              if (kDebugMode) {
+                print('Failed to schedule fallback notification: $innerErr');
+              }
+            }
+          }
         }
       }
+    }
+  }
+
+  // Schedule a custom/test notification at a specific date and time, returning diagnostic details.
+  Future<Map<String, String>> scheduleTestNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledDateTime,
+  }) async {
+    final result = <String, String>{};
+    if (kIsWeb) {
+      result['status'] = 'web_unsupported';
+      return result;
+    }
+
+    final localNow = DateTime.now();
+    final tzNow = tz.TZDateTime.now(tz.local);
+    final scheduledTZDateTime = tz.TZDateTime.from(scheduledDateTime, tz.local);
+    final exactAlarmGranted = await Permission.scheduleExactAlarm.isGranted;
+
+    result['localNow'] = localNow.toString().split('.').first;
+    result['tzNow'] = tzNow.toString().split('.').first;
+    result['scheduledTZDateTime'] = scheduledTZDateTime.toString().split('.').first;
+    result['timezone'] = tz.local.name;
+    result['exactAlarmGranted'] = exactAlarmGranted.toString();
+
+    try {
+      await _plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledTZDateTime,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'duezy_test_channel',
+            'Test Notifications',
+            channelDescription: 'Channel for testing notifications',
+            importance: Importance.max,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      );
+      result['status'] = 'success_exact';
+    } catch (e) {
+      result['exact_error'] = e.toString();
+      try {
+        await _plugin.zonedSchedule(
+          id: id,
+          title: title,
+          body: body,
+          scheduledDate: scheduledTZDateTime,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'duezy_test_channel',
+              'Test Notifications',
+              channelDescription: 'Channel for testing notifications',
+              importance: Importance.max,
+              priority: Priority.high,
+              enableVibration: true,
+              playSound: true,
+            ),
+          ),
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        );
+        result['status'] = 'success_inexact_fallback';
+      } catch (innerErr) {
+        result['status'] = 'failed';
+        result['inexact_error'] = innerErr.toString();
+      }
+    }
+    return result;
+  }
+
+  // Show an immediate notification for diagnostics.
+  Future<void> showImmediateNotification({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    if (kIsWeb) return;
+    try {
+      await _plugin.show(
+        id: id,
+        title: title,
+        body: body,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'duezy_test_channel',
+            'Test Notifications',
+            channelDescription: 'Channel for testing notifications',
+            importance: Importance.max,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('Failed to show immediate notification: $e');
+      }
+      rethrow;
     }
   }
 
